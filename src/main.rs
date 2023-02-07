@@ -2,6 +2,7 @@ use reqwest;
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::io::{stdin,stdout,Write};
+use colored::*;
 
 fn parse_node(node: scraper::element_ref::ElementRef) -> Option<HashMap<String, HashMap<&str, String>>> {
     let mut node_map: HashMap<&str, String> = HashMap::new();
@@ -19,9 +20,12 @@ fn parse_node(node: scraper::element_ref::ElementRef) -> Option<HashMap<String, 
     let mut bs_sort: String = String::from("not_found");
     let mut bs_sbuch: String = String::from("not_found");
     let mut bs_spreis: String = String::from("not_found");
-    let mut bs_szr: String = String::from("not_found");
+    let mut key: &str;
     for node in res {
-        let key: &str =  node.value().attr("class").unwrap();
+        match node.value().attr("class") {
+            Some(inner) => key = inner,
+            None => return None
+        }
         let value: String = node.inner_html();
         match key {
             "bs_sdet" => bs_sdet = value,
@@ -29,7 +33,6 @@ fn parse_node(node: scraper::element_ref::ElementRef) -> Option<HashMap<String, 
             "bs_stag" => bs_stag = value,
             "bs_szeit" => bs_szeit = value,
             "bs_sort" => bs_sort = node.select(&selector_a).next().unwrap().inner_html(),
-            "bs_szr" => bs_szr = node.select(&selector_a).next().unwrap().inner_html(),
             "bs_skl" => bs_skl = node.select(&selector_a).next().unwrap().inner_html(),
             "bs_spreis" => match node.select(&selector_div).next() {
                 Some(inner) => bs_spreis = inner.inner_html()
@@ -55,18 +58,58 @@ fn parse_node(node: scraper::element_ref::ElementRef) -> Option<HashMap<String, 
     node_map.insert("bs_sbuch", bs_sbuch);
     node_map.insert("bs_sdet", bs_sdet);
     node_map.insert("bs_spreis", bs_spreis);
-    node_map.insert("bs_szr", bs_szr);
     node_map.insert("bs_sort", bs_sort);
     node_map.insert("bs_skl", bs_skl);
-    node_map.insert("bs_datum", bs_stag);
+    node_map.insert("bs_stag", bs_stag);
     let map: HashMap<String, HashMap<&str, String>> = HashMap::from([
         (bs_sknr, node_map)
     ]);
     return Some(map);
 }
 
+fn print_map(map: HashMap<&str, HashMap<String, HashMap<&str, String>>>) {
+    let sport: &str = map.keys().next().unwrap();
+    for key in map[sport].keys() {
+        let clr: String;
+        if map[sport][key]["bs_sbuch"].contains("Warteliste") {
+            clr = String::from("red");
+        } else if map[sport][key]["bs_sbuch"].contains("buchen") {
+            clr = String::from("green");
+        } else {
+            clr = String::from("yellow");
+        }
+        let prc: String;
+        if map[sport][key]["bs_spreis"].contains('/') {
+            prc = map[sport][key]["bs_spreis"].split('/').next().unwrap().to_string()+"€";
+        } else {
+            prc = map[sport][key]["bs_spreis"].to_string();
+        }
+        println!("{} - {}",map[sport][key]["bs_sbuch"].color(clr).bold(),prc.dimmed());
+        match map[sport][key].get("bs_stag") {
+            Some(inner) => println!("{}",inner.bold()),
+            None => ()
+        }
+        match map[sport][key].get("bs_sdet") {
+            Some(inner) => if !inner.is_empty() {
+                println!("{}",inner.replace("&amp;", "&"))
+            }           
+            None => ()
+        }
+        match map[sport][key].get("bs_sort") {
+            Some(inner) => println!("{}",inner),
+            None => ()
+        }
+        match map[sport][key].get("bs_skl") {
+            Some(inner) => println!("{}",inner.dimmed()),
+            None => ()
+        }
+        println!()
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut url: String = String::from("https://www2.usz.uni-halle.de/angebote/aktueller_zeitraum/index.html");
     loop {
         let mut map: HashMap<&str, HashMap<String, HashMap<&str, String>>> = HashMap::new();
         print!("Name des Sportkurses: ");
@@ -82,11 +125,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if buffer.contains("exit") | buffer.contains("quit") {
             break;
         }
-        let url: String = String::from("https://www2.usz.uni-halle.de/angebote/aktueller_zeitraum/_");
-        buffer = format!("{}{buffer}", buffer.remove(0).to_uppercase());
-        let url = url+&buffer+".html";
-        map.insert(buffer.as_str(), HashMap::new());
-        let html = reqwest::get(url)
+        if buffer.starts_with("http") {
+            url = buffer;
+        } else if !buffer.is_empty() & !buffer.as_str().trim().is_empty() {
+            buffer = format!("{}{buffer}", buffer.remove(0).to_uppercase());
+            url = String::from("https://www2.usz.uni-halle.de/angebote/aktueller_zeitraum/_")+&buffer+".html";
+        }
+        map.insert(&url, HashMap::new());
+        let html = reqwest::get(&url)
             .await?
             .text()
             .await?;
@@ -95,11 +141,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let res = document.select(&selector);
         for node in res {
             match parse_node(node) {
-                Some(inner) => map.get_mut(buffer.as_str()).unwrap().extend(inner),
+                Some(inner) => map.get_mut(url.as_str()).unwrap().extend(inner),
                 None => (),
             };
         }
-        println!("{:#?}", map);
+        println!();
+        print_map(map);
     }
     Ok(())
 }
